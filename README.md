@@ -3,6 +3,18 @@
 This repository contains a small programm to decode a backup produced by [Signal Android](https://github.com/signalapp/Signal-Android).
 
 
+## Development
+
+### VS Code Dev Container
+
+This repository includes a VS Code dev container configuration that provides a complete development environment with all required dependencies pre-installed. To use it:
+
+1. Install [Docker](https://www.docker.com/products/docker-desktop) and [VS Code](https://code.visualstudio.com/)
+2. Install the [Remote - Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
+3. Open this repository in VS Code and click "Reopen in Container" when prompted
+
+See [.devcontainer/README.md](.devcontainer/README.md) for more details.
+
 ## Installation
 
 **Rust v1.41 or higher is required**. Install 
