@@ -1,5 +1,4 @@
-use hmac::crypto_mac::Mac;
-use hmac::crypto_mac::NewMac;
+use hmac::Mac;
 use openssl;
 use sha2::Digest;
 use subtle::ConstantTimeEq;
@@ -10,6 +9,7 @@ pub const LENGTH_HMAC: usize = 10;
 /// Decrypt bytes
 pub struct Decrypter {
 	mac: Option<hmac::Hmac<sha2::Sha256>>,
+	mac_key: Option<Vec<u8>>,
 	key: Vec<u8>,
 	iv: Vec<u8>,
 }
@@ -36,7 +36,12 @@ impl Decrypter {
 		// create hmac and cipher
 		Self {
 			mac: if verify_mac {
-				Some(hmac::Hmac::<sha2::Sha256>::new_varkey(&okm[32..]).unwrap())
+				Some(hmac::Hmac::<sha2::Sha256>::new_from_slice(&okm[32..]).unwrap())
+			} else {
+				None
+			},
+			mac_key: if verify_mac {
+				Some(okm[32..].to_vec())
 			} else {
 				None
 			},
@@ -45,7 +50,7 @@ impl Decrypter {
 		}
 	}
 
-	pub fn decrypt(&mut self, data_encrypted: &[u8]) -> Vec<u8> {
+	pub fn decrypt(&mut self, data_encrypted: &[u8]) -> Result<Vec<u8>, DecryptError> {
 		// check hmac?
 		if let Some(ref mut hmac) = self.mac {
 			// calculate hmac of frame data
@@ -59,7 +64,10 @@ impl Decrypter {
 			Some(&self.iv),
 			data_encrypted,
 		)
-		.unwrap()
+		.map_err(|e| DecryptError::DecryptionFailed { 
+			error: e.to_string(),
+			data_length: data_encrypted.len()
+		})
 	}
 
 	pub fn mac_update_with_iv(&mut self) {
@@ -70,17 +78,24 @@ impl Decrypter {
 
 	pub fn verify_mac(&mut self, hmac_control: &[u8]) -> Result<(), DecryptError> {
 		if let Some(ref mut hmac) = self.mac {
-			let result = hmac.finalize_reset();
+			// Clone the HMAC, finalize it, and compare
+			let hmac_clone = hmac.clone();
+			let result = hmac_clone.finalize();
 			let code_bytes = &result.into_bytes()[..LENGTH_HMAC];
 
 			// compare to given hmac
-			let result = code_bytes.ct_eq(&hmac_control);
+			let cmp_result = code_bytes.ct_eq(&hmac_control);
 
-			if result.unwrap_u8() == 0 {
+			if cmp_result.unwrap_u8() == 0 {
 				return Err(DecryptError::MacVerificationFailed {
 					their_mac: hmac_control.to_vec(),
 					our_mac: code_bytes.to_vec(),
 				});
+			}
+			
+			// Reset the HMAC by creating a new one
+			if let Some(ref mac_key) = self.mac_key {
+				*hmac = hmac::Hmac::<sha2::Sha256>::new_from_slice(mac_key).unwrap();
 			}
 		}
 
@@ -98,6 +113,14 @@ impl Decrypter {
 			}
 		}
 	}
+	
+	pub fn get_key(&self) -> &[u8] {
+		&self.key
+	}
+	
+	pub fn get_iv(&self) -> &[u8] {
+		&self.iv
+	}
 }
 
 #[derive(Debug)]
@@ -105,6 +128,10 @@ pub enum DecryptError {
 	MacVerificationFailed {
 		their_mac: Vec<u8>,
 		our_mac: Vec<u8>,
+	},
+	DecryptionFailed {
+		error: String,
+		data_length: usize,
 	},
 }
 
@@ -117,6 +144,11 @@ impl std::fmt::Display for DecryptError {
 				f,
 				"HMAC verification failed (their mac: {:02X?}, our mac: {:02X?})",
 				their_mac, our_mac
+			),
+			Self::DecryptionFailed { error, data_length } => write!(
+				f,
+				"Decryption failed for data of length {} bytes: {}. This may indicate an incorrect password or corrupted backup file.",
+				data_length, error
 			),
 		}
 	}
@@ -134,6 +166,7 @@ mod tests {
 		// test increase at position 3
 		let mut dec = Decrypter {
 			mac: None,
+			mac_key: None,
 			key: key.to_vec(),
 			iv: iv.to_vec(),
 		};
@@ -147,6 +180,7 @@ mod tests {
 		iv[2] = 255;
 		let mut dec = Decrypter {
 			mac: None,
+			mac_key: None,
 			key: key.to_vec(),
 			iv: iv.to_vec(),
 		};

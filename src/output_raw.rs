@@ -145,7 +145,7 @@ impl crate::output::SignalOutput for SignalOutputRaw {
 			.sqlite_connection
 			.prepare_cached(statement)
 			.with_context(|| format!("failed to prepare database statement: {}", statement))?;
-		stmt.execute(parameters)
+		stmt.execute(rusqlite::params_from_iter(parameters.iter()))
 			.with_context(|| format!("failed to execute database statement: {}", statement))?;
 
 		self.written_frames += 1;
@@ -263,7 +263,7 @@ impl crate::output::SignalOutput for SignalOutputRaw {
 		self.sqlite_connection
 			.execute(
 				&format!("VACUUM INTO \"{}\";", path_sqlite.to_string_lossy()),
-				rusqlite::NO_PARAMS,
+				[],
 			)
 			.with_context(|| {
 				format!(

@@ -1,5 +1,5 @@
 # Use the official Rust image as base
-FROM rust:1.75-bookworm
+FROM rust:1-slim
 
 # Install system dependencies required by signal-backup-decode
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
@@ -28,3 +28,6 @@ RUN groupadd --gid $USER_GID $USERNAME \
     && chmod 0440 /etc/sudoers.d/$USERNAME
 
 USER $USERNAME
+
+# Set the default shell to bash
+SHELL ["/bin/bash", "-c"]

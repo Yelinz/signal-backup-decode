@@ -31,9 +31,9 @@ impl InputFile {
 		// - read first frame
 		let len: usize = reader
 			.read_u32::<byteorder::BigEndian>()
-			.unwrap()
+			.context("Failed to read frame length from backup file")?
 			.try_into()
-			.unwrap();
+			.context("Frame length too large to fit in memory")?;
 		let mut frame = vec![0u8; len];
 		reader.read_exact(&mut frame)?;
 		let frame: crate::frame::Frame = frame.try_into()?;
@@ -75,7 +75,7 @@ impl InputFile {
 
 		// read data and decrypt
 		self.reader.read_exact(&mut data)?;
-		let data = self.decrypter.decrypt(&mut data);
+		let data = self.decrypter.decrypt(&mut data)?;
 
 		// read hmac
 		self.reader.read_exact(&mut hmac)?;
@@ -97,21 +97,93 @@ impl InputFile {
 	}
 
 	pub fn read_frame(&mut self) -> Result<crate::frame::Frame, anyhow::Error> {
-		// read frame length from input file
-		let len: usize = self
-			.reader
-			.read_u32::<byteorder::BigEndian>()
-			.unwrap()
-			.try_into()
-			.unwrap();
+		// Read frame length (4 encrypted bytes)
+		let mut frame_len_bytes = [0u8; 4];
+		self.reader.read_exact(&mut frame_len_bytes)
+			.context("Failed to read frame length from backup file")?;
+		
 		debug!(
-			"Read frame number {} with length of {} bytes",
-			self.count_frame, len
+			"Raw encrypted frame length bytes for frame {}: {:02X?}",
+			self.count_frame + 1,
+			frame_len_bytes
+		);
+		
+		// Preview decrypt the length WITHOUT updating HMAC
+		// We use openssl directly to avoid HMAC side effects
+		let decrypted_len_bytes = openssl::symm::decrypt(
+			openssl::symm::Cipher::aes_256_ctr(),
+			self.decrypter.get_key(),
+			Some(self.decrypter.get_iv()),
+			&frame_len_bytes,
+		).map_err(|e| anyhow!("Failed to decrypt frame length: {}", e))?;
+		
+		let frame_len_raw = u32::from_be_bytes([
+			decrypted_len_bytes[0],
+			decrypted_len_bytes[1],
+			decrypted_len_bytes[2],
+			decrypted_len_bytes[3],
+		]);
+		
+		debug!(
+			"Decrypted frame length for frame {}: {} bytes (0x{:08X})",
+			self.count_frame + 1,
+			frame_len_raw,
+			frame_len_raw
+		);
+		
+		let len: usize = frame_len_raw
+			.try_into()
+			.context(format!("Frame length {} is too large to fit in memory", frame_len_raw))?;
+		
+		// Validate frame length is reasonable (max 100MB per frame)
+		const MAX_FRAME_SIZE: usize = 100 * 1024 * 1024;
+		if len > MAX_FRAME_SIZE {
+			return Err(anyhow!(
+				"Frame {} has unreasonably large length of {} bytes (max {} bytes). This likely indicates a corrupted backup file or incorrect password.",
+				self.count_frame + 1,
+				len,
+				MAX_FRAME_SIZE
+			));
+		}
+		
+		debug!(
+			"Reading frame {} with length of {} bytes",
+			self.count_frame + 1, len
 		);
 
-		// create frame
-		let frame = self.read_data(len, false)?;
-		let mut frame: crate::frame::Frame = frame.try_into()?;
+		// len includes the 10-byte HMAC, so actual encrypted data is len - 10
+		let data_len = len.checked_sub(crate::decrypter::LENGTH_HMAC)
+			.ok_or_else(|| anyhow!("Frame length {} is too small to contain HMAC", len))?;
+		
+		// Read the encrypted frame data
+		let mut encrypted_data = vec![0u8; data_len];
+		self.reader.read_exact(&mut encrypted_data)?;
+		
+		// Concatenate length + data and decrypt as ONE continuous stream
+		// This is crucial for CTR mode to work correctly
+		let mut all_encrypted = Vec::with_capacity(4 + data_len);
+		all_encrypted.extend_from_slice(&frame_len_bytes);
+		all_encrypted.extend_from_slice(&encrypted_data);
+		
+		// Decrypt everything together (length + data) - this also updates HMAC
+		let all_decrypted = self.decrypter.decrypt(&all_encrypted)?;
+		
+		// Extract just the frame data part (skip the 4-byte length prefix)
+		let data = all_decrypted[4..].to_vec();
+		
+		// Read and verify HMAC
+		let mut hmac = [0u8; crate::decrypter::LENGTH_HMAC];
+		self.reader.read_exact(&mut hmac)?;
+		self.decrypter.verify_mac(&hmac)?;
+		
+		// Increment IV for next frame
+		self.decrypter.increase_iv();
+		
+		// Update byte counter (4 bytes length + len bytes for data+hmac)
+		self.count_byte += 4 + len;
+
+		// Parse frame from decrypted data
+		let mut frame: crate::frame::Frame = data.try_into()?;
 		debug!("Frame type: {}", &frame);
 
 		match frame {

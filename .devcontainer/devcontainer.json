@@ -7,8 +7,7 @@
     "vscode": {
       "extensions": [
         "rust-lang.rust-analyzer",
-        "tamasfe.even-better-toml",
-        "serayuzgur.crates"
+        "tamasfe.even-better-toml"
       ],
       "settings": {
         "rust-analyzer.checkOnSave.command": "clippy"
