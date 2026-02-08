@@ -213,7 +213,7 @@ impl crate::output::SignalOutput for SignalOutputRaw {
 			.with_context(|| format!("Failed to create path: {}", path.to_string_lossy()))?;
 
 		// open connection to file
-		let path = path.join(pref.get_file());
+		let path = path.join(pref.file());
 		if path.exists() && !self.force_write && !self.created_files.contains(&path) {
 			return Err(anyhow!(
 				"Config file does already exist: {}. Try -f",
@@ -224,7 +224,7 @@ impl crate::output::SignalOutput for SignalOutputRaw {
 		// write to file
 		let mut conf = ini::Ini::load_from_file(&path).unwrap_or_default();
 		conf.with_section(None::<String>)
-			.set(pref.get_key(), pref.get_value());
+			.set(pref.key(), pref.value());
 		conf.write_to_file(&path).with_context(|| {
 			format!(
 				"Could not write to preference file: {}",

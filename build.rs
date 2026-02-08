@@ -1,9 +1,9 @@
 #[cfg(feature = "rebuild-protobuf")]
-extern crate protoc_rust;
+extern crate protobuf_codegen;
 
 #[cfg(feature = "rebuild-protobuf")]
 fn main() {
-	protoc_rust::Codegen::new()
+	protobuf_codegen::Codegen::new()
 		.out_dir("src")
 		.inputs(&["proto/Backups.proto"])
 		.include("proto")

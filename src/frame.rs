@@ -51,31 +51,31 @@ impl Frame {
 		let mut fields_count = 0;
 		let mut ret: Option<Self> = None;
 
-		if frame.has_header() {
+		if frame.header.is_some() {
 			fields_count += 1;
-			let mut header = frame.take_header();
+			let header = frame.header.take().unwrap();
 			ret = Some(Self::Header {
-				salt: header.take_salt(),
-				iv: header.take_iv(),
+				salt: header.salt.unwrap_or_default(),
+				iv: header.iv.unwrap_or_default(),
 			});
 		};
 
-		if frame.has_statement() {
+		if frame.statement.is_some() {
 			fields_count += 1;
-			let mut statement = frame.take_statement();
+			let statement = frame.statement.take().unwrap();
 			ret = Some(Self::Statement {
-				statement: statement.take_statement(),
+				statement: statement.statement.clone().unwrap_or_default(),
 				parameter: {
 					let mut params: Vec<rusqlite::types::Value> = Vec::new();
-					for param in statement.take_parameters().iter_mut() {
+					for param in statement.parameters.iter() {
 						if param.has_stringParamter() {
-							params.push(param.take_stringParamter().into());
+							params.push(param.stringParamter().to_string().into());
 						} else if param.has_integerParameter() {
-							params.push((param.get_integerParameter() as i64).into());
+							params.push((param.integerParameter() as i64).into());
 						} else if param.has_doubleParameter() {
-							params.push(param.get_doubleParameter().into());
+							params.push(param.doubleParameter().into());
 						} else if param.has_blobParameter() {
-							params.push(param.take_blobParameter().into());
+							params.push(param.blobParameter().to_vec().into());
 						} else if param.has_nullparameter() {
 							params.push(rusqlite::types::Null.into());
 						} else {
@@ -87,28 +87,29 @@ impl Frame {
 			});
 		};
 
-		if frame.has_preference() {
+		if frame.preference.is_some() {
 			fields_count += 1;
 			ret = Some(Self::Preference {
-				preference: frame.take_preference(),
+				preference: frame.preference.take().unwrap(),
 			});
 		};
 
-		if frame.has_attachment() {
+		if frame.attachment.is_some() {
 			fields_count += 1;
-			let attachment = frame.take_attachment();
+			let attachment = frame.attachment.as_ref().unwrap();
 			ret = Some(Self::Attachment {
-				data_length: attachment.get_length().try_into().unwrap(),
-				id: attachment.get_attachmentId(),
-				row: attachment.get_rowId(),
+				data_length: attachment.length.unwrap_or(0).try_into().unwrap(),
+				id: attachment.attachmentId.unwrap_or(0),
+				row: attachment.rowId.unwrap_or(0),
 				data: None,
 			});
 		};
 
-		if frame.has_version() {
+		if frame.version.is_some() {
 			fields_count += 1;
+			let version = frame.version.as_ref().unwrap();
 			ret = Some(Self::Version {
-				version: frame.get_version().get_version(),
+				version: version.version.unwrap_or(0),
 			});
 		};
 
@@ -117,29 +118,29 @@ impl Frame {
 			ret = Some(Self::End);
 		};
 
-		if frame.has_avatar() {
+		if frame.avatar.is_some() {
 			fields_count += 1;
-			let mut avatar = frame.take_avatar();
+			let avatar = frame.avatar.as_ref().unwrap();
 			ret = Some(Self::Avatar {
-				data_length: avatar.get_length().try_into().unwrap(),
-				name: avatar.take_name(),
+				data_length: avatar.length.unwrap_or(0).try_into().unwrap(),
+				name: avatar.name.clone().unwrap_or_default(),
 				data: None,
 			});
 		};
 
-		if frame.has_sticker() {
+		if frame.sticker.is_some() {
 			fields_count += 1;
-			let sticker = frame.take_sticker();
+			let sticker = frame.sticker.as_ref().unwrap();
 			ret = Some(Self::Sticker {
-				data_length: sticker.get_length().try_into().unwrap(),
-				row: sticker.get_rowId(),
+				data_length: sticker.length.unwrap_or(0).try_into().unwrap(),
+				row: sticker.rowId.unwrap_or(0),
 				data: None,
 			});
 		};
 
-		if frame.has_keyValue() {
+		if frame.keyValue.is_some() {
 			fields_count += 1;
-			let key_value = frame.take_keyValue();
+			let key_value = frame.keyValue.take().unwrap();
 			ret = Some(Self::KeyValue {
 				key_value
 			});
@@ -157,9 +158,9 @@ impl Frame {
 
 	pub fn set_data(&mut self, data_add: Vec<u8>) {
 		match self {
-			Frame::Attachment { ref mut data, .. } => *data = Some(data_add),
-			Frame::Avatar { ref mut data, .. } => *data = Some(data_add),
-			Frame::Sticker { ref mut data, .. } => *data = Some(data_add),
+			Frame::Attachment { data, .. } => *data = Some(data_add),
+			Frame::Avatar { data, .. } => *data = Some(data_add),
+			Frame::Sticker { data, .. } => *data = Some(data_add),
 			_ => panic!("Cannot set data on variant without data field."),
 		}
 	}

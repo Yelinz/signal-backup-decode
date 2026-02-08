@@ -1,8 +1,55 @@
 // imports
 use anyhow::anyhow;
 use anyhow::Context;
-use clap::{crate_authors, crate_description, crate_name, crate_version};
+use clap::Parser;
 use std::io::BufRead;
+
+#[derive(Parser)]
+#[command(name = clap::crate_name!())]
+#[command(version = clap::crate_version!())]
+#[command(about = clap::crate_description!())]
+#[command(author = clap::crate_authors!())]
+struct Args {
+	/// Sets the input file to use
+	#[arg(value_name = "INPUT", required = true)]
+	input_file: std::path::PathBuf,
+
+	/// Directory to save output to. If not given, input file directory is used
+	#[arg(short = 'o', long = "output-path", value_name = "FOLDER")]
+	output_path: Option<std::path::PathBuf>,
+
+	/// Output type, either RAW, CSV or NONE
+	#[arg(short = 't', long = "output-type", value_name = "TYPE")]
+	output_type: Option<String>,
+
+	/// Verbosity level, either DEBUG, INFO, WARN, or ERROR
+	#[arg(short = 'v', long = "verbosity", value_name = "LEVEL")]
+	log_level: Option<String>,
+
+	/// Overwrite existing output files
+	#[arg(short = 'f', long = "force")]
+	force_overwrite: bool,
+
+	/// Do not verify the HMAC of each frame in the backup
+	#[arg(long = "no-verify-mac")]
+	no_verify_mac: bool,
+
+	/// Do not use in memory sqlite database. Database is immediately created on disk (only considered with output type RAW).
+	#[arg(long = "no-in-memory-db")]
+	no_in_memory_db: bool,
+
+	/// Backup password (30 digits, with or without spaces)
+	#[arg(short = 'p', long = "password", value_name = "PASSWORD", group = "password")]
+	password_string: Option<String>,
+
+	/// File to read the backup password from
+	#[arg(long = "password-file", value_name = "FILE", group = "password")]
+	password_file: Option<std::path::PathBuf>,
+
+	/// Read backup password from stdout from COMMAND
+	#[arg(long = "password-command", value_name = "COMMAND", group = "password")]
+	password_command: Option<String>,
+}
 
 /// Config struct
 ///
@@ -29,119 +76,42 @@ pub struct Config {
 impl Config {
 	/// Create new config object
 	pub fn new() -> Result<Self, anyhow::Error> {
-		let matches = clap::App::new(crate_name!())
-			.version(crate_version!())
-			.about(crate_description!())
-			.author(crate_authors!())
-			.arg(
-				clap::Arg::with_name("input-file")
-					.help("Sets the input file to use")
-					.takes_value(true)
-					.value_name("INPUT")
-					.required(true)
-					.index(1),
-			)
-			.arg(
-				clap::Arg::with_name("output-path")
-					.help("Directory to save output to. If not given, input file directory is used")
-					.long("output-path")
-					.short("o")
-					.takes_value(true)
-					.value_name("FOLDER"),
-			)
-			.arg(
-				clap::Arg::with_name("output-type")
-					.help("Output type, either RAW, CSV or NONE")
-					.long("output-type")
-					.short("t")
-					.takes_value(true)
-					.value_name("TYPE"),
-			)
-			.arg(
-				clap::Arg::with_name("log-level")
-					.help("Verbosity level, either DEBUG, INFO, WARN, or ERROR")
-					.long("verbosity")
-					.short("v")
-					.takes_value(true)
-					.value_name("LEVEL"),
-			)
-			.arg(
-				clap::Arg::with_name("force-overwrite")
-					.help("Overwrite existing output files")
-					.long("force")
-					.short("f"),
-			)
-			.arg(
-				clap::Arg::with_name("no-verify-mac")
-					.help("Do not verify the HMAC of each frame in the backup")
-					.long("no-verify-mac"),
-			)
-			.arg(
-				clap::Arg::with_name("no-in-memory-db")
-					.help("Do not use in memory sqlite database. Database is immediately created on disk (only considered with output type RAW).")
-					.long("no-in-memory-db"),
-			)
-			.arg(
-				clap::Arg::with_name("password-string")
-					.help("Backup password (30 digits, with or without spaces)")
-					.long("password")
-					.takes_value(true)
-					.value_name("PASSWORD")
-					.short("p"),
-			)
-			.arg(
-				clap::Arg::with_name("password-file")
-					.help("File to read the backup password from")
-					.long("password-file")
-					.takes_value(true)
-					.value_name("FILE"),
-			)
-			.arg(
-				clap::Arg::with_name("password-command")
-					.help("Read backup password from stdout from COMMAND")
-					.long("password-command")
-					.takes_value(true)
-					.value_name("COMMAND"),
-			)
-			.group(
-				clap::ArgGroup::with_name("password")
-					.args(&["password-string", "password-file", "password-command"])
-					.required(true)
-					.multiple(false),
-			)
-			.get_matches();
+		let args = Args::parse();
 
 		// input file handling
-		let input_file = std::path::PathBuf::from(matches.value_of("input-file").unwrap());
+		let input_file = args.input_file;
 
 		// output path handling
-		let output_path = std::path::PathBuf::from(matches.value_of("output-path").unwrap_or({
-			input_file
-				.file_stem()
-				.unwrap()
-				.to_str()
-				.context("output-path is not given and path to input file could not be read.")?
-		}));
+		let output_path = if let Some(path) = args.output_path {
+			path
+		} else {
+			std::path::PathBuf::from(
+				input_file
+					.file_stem()
+					.context("Could not determine output path from input file")?
+					.to_str()
+					.context("Output path contains invalid characters")?,
+			)
+		};
 
 		// password handling
 		let mut password = {
-			if matches.is_present("password-string") {
-				String::from(matches.value_of("password-string").unwrap())
-			} else if matches.is_present("password-file") {
+			if let Some(pwd) = args.password_string {
+				pwd
+			} else if let Some(file_path) = args.password_file {
 				let password_file = std::io::BufReader::new(
-					std::fs::File::open(matches.value_of("password-file").unwrap())
-						.context("Unable to open password file")?,
+					std::fs::File::open(file_path).context("Unable to open password file")?,
 				);
 				password_file
 					.lines()
 					.next()
 					.context("Password file is empty")?
 					.context("Unable to read from password file")?
-			} else if matches.is_present("password-command") {
+			} else if let Some(command) = args.password_command {
 				let shell = std::env::var("SHELL").context("Could not determine current shell")?;
 				let output = std::process::Command::new(shell)
 					.arg("-c")
-					.arg(matches.value_of("password-command").unwrap())
+					.arg(command)
 					.output()
 					.context("Failed to execute password command")?;
 
@@ -157,7 +127,7 @@ impl Config {
 					return Err(anyhow!("Password command returned error code"));
 				}
 			} else {
-				unreachable!()
+				return Err(anyhow!("No password provided"));
 			}
 		};
 		password.retain(|c| c >= '0' && c <= '9');
@@ -169,7 +139,7 @@ impl Config {
 		}
 
 		// verbosity handling
-		let log_level = if let Some(x) = matches.value_of("log-level") {
+		let log_level = if let Some(x) = args.log_level {
 			match x.to_lowercase().as_str() {
 				"debug" => log::LevelFilter::Debug,
 				"info" => log::LevelFilter::Info,
@@ -182,7 +152,7 @@ impl Config {
 		};
 
 		// determine output type
-		let output_type = if let Some(x) = matches.value_of("output-type") {
+		let output_type = if let Some(x) = args.output_type {
 			match x.to_lowercase().as_str() {
 				"none" => crate::output::SignalOutputType::None,
 				"raw" => crate::output::SignalOutputType::Raw,
@@ -197,11 +167,11 @@ impl Config {
 			path_input: input_file,
 			path_output: output_path,
 			password,
-			verify_mac: !matches.is_present("no_verify_mac"),
+			verify_mac: !args.no_verify_mac,
 			log_level,
-			force_overwrite: matches.is_present("force-overwrite"),
+			force_overwrite: args.force_overwrite,
 			output_type,
-			output_raw_db_in_memory: !matches.is_present("no-in-memory-db"),
+			output_raw_db_in_memory: !args.no_in_memory_db,
 		})
 	}
 }
